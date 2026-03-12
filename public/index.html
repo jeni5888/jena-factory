@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JENA-FACTORY — Mission Control</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="header">
+    <h1>JENA<span>-FACTORY</span></h1>
+    <div class="header-right">
+      <span id="status-badge" class="status-badge idle">IDLE</span>
+      <span id="cost-total" class="cost-total">$0.00</span>
+    </div>
+  </header>
+
+  <div class="section-title">EPICS</div>
+  <div id="epic-grid" class="epic-grid">
+    <div class="loading">Loading</div>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <div class="panel-title">ACTIVE RUN</div>
+      <div id="active-run">
+        <div class="run-stat"><span class="label">Run</span><span class="value" id="run-id">—</span></div>
+        <div class="run-stat"><span class="label">Task</span><span class="value" id="run-task">—</span></div>
+        <div class="run-stat"><span class="label">Epic</span><span class="value" id="run-epic">—</span></div>
+        <div class="run-stat"><span class="label">Iteration</span><span class="value" id="run-iter">—</span></div>
+        <div class="run-stat"><span class="label">Verdict</span><span class="value" id="run-verdict">—</span></div>
+        <div class="run-stat"><span class="label">Started</span><span class="value" id="run-started">—</span></div>
+        <div class="run-stat"><span class="label">Cost</span><span class="value amber" id="run-cost">—</span></div>
+      </div>
+      <div class="panel-title" style="margin-top:16px">RECENT RUNS</div>
+      <div id="runs-list" class="runs-list"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">TOKEN COSTS</div>
+      <div id="cost-panel">
+        <div class="cost-row"><span class="label">Total</span><span class="value" id="cost-all">$0.00</span></div>
+        <div class="cost-bar"><div class="cost-bar-fill" id="cost-bar-fill" style="width:0%"></div></div>
+      </div>
+      <div class="panel-title" style="margin-top:12px">COST PER EPIC</div>
+      <div id="cost-per-epic"></div>
+      <div class="panel-title" style="margin-top:16px">TASKS</div>
+      <div id="task-list" class="task-list"><span class="text-dim">Click an epic to see tasks</span></div>
+    </div>
+  </div>
+
+  <div class="section-title">TIMELINE</div>
+  <div id="timeline" class="timeline">
+    <div class="loading">Loading</div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

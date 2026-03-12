@@ -1,0 +1,13 @@
+{
+  "name": "jena-factory",
+  "version": "1.0.0",
+  "description": "Web-based Ralph monitoring dashboard for Flow-Next",
+  "main": "server.ts",
+  "scripts": {
+    "start": "bun run server.ts",
+    "dev": "bun run --watch server.ts"
+  },
+  "author": "jeni5888",
+  "license": "MIT",
+  "private": true
+}
