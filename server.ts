@@ -131,12 +131,18 @@ function getStatus(runs: ReturnType<typeof scanRuns>) {
   if (runs.length === 0) return { active: false };
   const latest = runs[0];
   const lastIter = latest.iterations[latest.iterations.length - 1];
+
+  // Detect actively running iteration even if progress.txt hasn't been updated yet
+  const hasRunningIter = latest.iterCosts.length > latest.iterations.length;
+  const iterCount = Math.max(latest.iterations.length, latest.iterCosts.length);
+  const isActive = hasRunningIter || (!!lastIter && !["BLOCKED", "STOP"].includes(lastIter.verdict || ""));
+
   return {
-    active: !!lastIter && !["BLOCKED", "STOP"].includes(lastIter.verdict || ""),
+    active: isActive,
     runId: latest.id,
-    currentTask: lastIter?.task,
+    currentTask: lastIter?.task || (hasRunningIter ? "working..." : undefined),
     currentEpic: lastIter?.epic,
-    iteration: latest.iterations.length,
+    iteration: iterCount,
     verdict: lastIter?.verdict,
     started: latest.started,
     totalCost: latest.totalCost,
@@ -191,7 +197,7 @@ Bun.serve({
         runs.map((r) => ({
           id: r.id,
           started: r.started,
-          iterCount: r.iterations.length,
+          iterCount: Math.max(r.iterations.length, r.iterCosts.length),
           totalCost: r.totalCost,
           branches: r.branches,
           lastVerdict: r.iterations[r.iterations.length - 1]?.verdict,
