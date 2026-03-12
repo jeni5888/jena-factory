@@ -57,7 +57,7 @@ fi
 
 echo ""
 echo "╔══════════════════════════════════════╗"
-echo "║  JENA-FACTORY installed!             ║"
+echo "║  JenaAI-Factory installed!           ║"
 echo "║  Run: jena-factory                   ║"
 echo "║  Open: http://localhost:$PORT          ║"
 echo "╚══════════════════════════════════════╝"

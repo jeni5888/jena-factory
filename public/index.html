@@ -3,55 +3,138 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>JENA-FACTORY — Mission Control</title>
+  <title>JenaAI-Factory — Mission Control</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+
+  <!-- ═══ HEADER ═══ -->
   <header class="header">
-    <h1>JENA<span>-FACTORY</span></h1>
-    <div class="header-right">
+    <div class="header-left">
+      <h1><span class="brand-jena">JenaAI</span><span class="brand-sep">-</span><span class="brand-factory">Factory</span></h1>
       <span id="status-badge" class="status-badge idle">IDLE</span>
-      <span id="cost-total" class="cost-total">$0.00</span>
+      <span id="status-task" class="status-task"></span>
+    </div>
+    <div class="header-right">
+      <span id="elapsed-timer" class="elapsed-timer">--:--</span>
+      <span id="iter-count" class="iter-badge">iter —</span>
+      <span id="cost-total" class="cost-badge">$0.00</span>
     </div>
   </header>
 
+  <!-- ═══ PROGRESS BAR ═══ -->
+  <div class="global-progress">
+    <div class="global-progress-fill" id="global-progress-fill"></div>
+    <span class="global-progress-label" id="global-progress-label">0/0 tasks (0%)</span>
+  </div>
+
+  <!-- ═══ ZONE A: EPIC CARDS ═══ -->
   <div class="section-title">EPICS</div>
   <div id="epic-grid" class="epic-grid">
-    <div class="loading">Loading</div>
+    <div class="loading">Scanning</div>
   </div>
 
+  <!-- ═══ ZONE B + C: ACTIVITY + METRICS ═══ -->
   <div class="panels">
-    <div class="panel">
-      <div class="panel-title">ACTIVE RUN</div>
-      <div id="active-run">
-        <div class="run-stat"><span class="label">Run</span><span class="value" id="run-id">—</span></div>
-        <div class="run-stat"><span class="label">Task</span><span class="value" id="run-task">—</span></div>
-        <div class="run-stat"><span class="label">Epic</span><span class="value" id="run-epic">—</span></div>
-        <div class="run-stat"><span class="label">Iteration</span><span class="value" id="run-iter">—</span></div>
-        <div class="run-stat"><span class="label">Verdict</span><span class="value" id="run-verdict">—</span></div>
-        <div class="run-stat"><span class="label">Started</span><span class="value" id="run-started">—</span></div>
-        <div class="run-stat"><span class="label">Cost</span><span class="value amber" id="run-cost">—</span></div>
+    <div class="panel panel-activity">
+      <div class="panel-title">LIVE ACTIVITY</div>
+
+      <!-- Current Task -->
+      <div class="sub-panel" id="current-task-panel">
+        <div class="sub-title">Current Task</div>
+        <div id="current-task-info" class="current-task-info">
+          <span class="text-dim">Waiting for data...</span>
+        </div>
       </div>
-      <div class="panel-title" style="margin-top:16px">RECENT RUNS</div>
-      <div id="runs-list" class="runs-list"></div>
+
+      <!-- Live Tool Feed -->
+      <div class="sub-panel">
+        <div class="sub-title">Live Tool Feed</div>
+        <div id="tool-feed" class="tool-feed">
+          <span class="text-dim">No activity</span>
+        </div>
+      </div>
+
+      <!-- Subagents -->
+      <div class="sub-panel">
+        <div class="sub-title">Subagents</div>
+        <div id="subagent-list" class="subagent-list">
+          <span class="text-dim">None</span>
+        </div>
+      </div>
+
+      <!-- Error Feed -->
+      <div class="sub-panel" id="error-panel" style="display:none">
+        <div class="sub-title error-title">Errors</div>
+        <div id="error-feed" class="error-feed"></div>
+      </div>
     </div>
-    <div class="panel">
-      <div class="panel-title">TOKEN COSTS</div>
-      <div id="cost-panel">
-        <div class="cost-row"><span class="label">Total</span><span class="value" id="cost-all">$0.00</span></div>
-        <div class="cost-bar"><div class="cost-bar-fill" id="cost-bar-fill" style="width:0%"></div></div>
+
+    <div class="panel panel-metrics">
+      <div class="panel-title">METRICS</div>
+
+      <!-- Token/Cost Panel -->
+      <div class="sub-panel">
+        <div class="sub-title">Token Costs</div>
+        <div id="cost-detail" class="cost-detail">
+          <div class="metric-row"><span class="label">Total</span><span class="value gold" id="cost-all">$0.00</span></div>
+          <div class="metric-row"><span class="label">This Run</span><span class="value gold" id="cost-run">$0.00</span></div>
+          <div class="metric-row"><span class="label">This Iter</span><span class="value gold" id="cost-iter">$0.00</span></div>
+          <div class="metric-row">
+            <span class="label">Cache Hit</span>
+            <span class="value" id="cache-hit-val">—</span>
+          </div>
+          <div class="cache-bar"><div class="cache-bar-fill" id="cache-bar-fill"></div></div>
+        </div>
+        <div class="sub-title" style="margin-top:12px">Model Breakdown</div>
+        <div id="model-breakdown" class="model-breakdown">
+          <span class="text-dim">—</span>
+        </div>
       </div>
-      <div class="panel-title" style="margin-top:12px">COST PER EPIC</div>
-      <div id="cost-per-epic"></div>
-      <div class="panel-title" style="margin-top:16px">TASKS</div>
-      <div id="task-list" class="task-list"><span class="text-dim">Click an epic to see tasks</span></div>
+
+      <!-- Tool Distribution -->
+      <div class="sub-panel">
+        <div class="sub-title">Tool Distribution</div>
+        <div id="tool-dist" class="tool-dist">
+          <span class="text-dim">No data</span>
+        </div>
+      </div>
+
+      <!-- Subagent Stats -->
+      <div class="sub-panel">
+        <div class="sub-title">Subagent Stats</div>
+        <div id="subagent-stats" class="subagent-stats">
+          <div class="metric-row"><span class="label">Dispatched</span><span class="value" id="sa-dispatched">0</span></div>
+          <div class="metric-row"><span class="label">Completed</span><span class="value green" id="sa-completed">0</span></div>
+          <div class="metric-row"><span class="label">Running</span><span class="value cyan" id="sa-running">0</span></div>
+          <div class="metric-row"><span class="label">Tokens</span><span class="value" id="sa-tokens">0</span></div>
+        </div>
+      </div>
     </div>
   </div>
 
-  <div class="section-title">TIMELINE</div>
+  <!-- ═══ ZONE D: TIMELINE ═══ -->
+  <div class="section-title">ITERATION TIMELINE</div>
   <div id="timeline" class="timeline">
     <div class="loading">Loading</div>
   </div>
+
+  <!-- ═══ ZONE E: TASK DETAIL ═══ -->
+  <div id="task-detail-zone" class="task-detail-zone" style="display:none">
+    <div class="section-title" id="task-detail-title">TASKS</div>
+    <div id="task-detail" class="task-detail"></div>
+  </div>
+
+  <!-- ═══ RUN HISTORY ═══ -->
+  <div class="section-title">RUN HISTORY</div>
+  <div id="run-history" class="run-history">
+    <div class="loading">Loading</div>
+  </div>
+
+  <footer class="footer">
+    <span class="text-dim">JenaAI-Factory Mission Control</span>
+    <span class="text-dim" id="connection-status">Connecting...</span>
+  </footer>
 
   <script src="/app.js"></script>
 </body>

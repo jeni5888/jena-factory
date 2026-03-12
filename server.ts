@@ -1,7 +1,7 @@
 import { join } from "path";
 import { statSync, readFileSync, existsSync } from "fs";
-import { scanEpics, scanTasks } from "./lib/scanner";
-import { parseProgress, parseIterResult } from "./lib/parser";
+import { scanEpics, scanTasks, scanTasksWithState } from "./lib/scanner";
+import { parseProgress, parseIterResult, parseIterDeep } from "./lib/parser";
 import { aggregateCosts } from "./lib/cost";
 import { Cache } from "./lib/cache";
 
@@ -14,7 +14,6 @@ for (let i = 0; i < args.length; i++) {
   if (args[i] === "--project-dir" && args[i + 1]) projectDir = args[i + 1];
 }
 
-// Auto-discover project dir
 if (!projectDir) {
   const cwd = process.cwd();
   if (existsSync(join(cwd, ".flow"))) {
@@ -31,7 +30,7 @@ const publicDir = join(import.meta.dir, "public");
 const cache = new Cache();
 
 console.log(`\x1b[36m╔══════════════════════════════════════╗\x1b[0m`);
-console.log(`\x1b[36m║\x1b[0m  \x1b[1;33mJENA-FACTORY\x1b[0m  Mission Control      \x1b[36m║\x1b[0m`);
+console.log(`\x1b[36m║\x1b[0m  \x1b[1;35mJenaAI\x1b[1;33m-Factory\x1b[0m  Mission Control   \x1b[36m║\x1b[0m`);
 console.log(`\x1b[36m╠══════════════════════════════════════╣\x1b[0m`);
 console.log(`\x1b[36m║\x1b[0m  Project: ${projectDir.slice(-30).padEnd(26)} \x1b[36m║\x1b[0m`);
 console.log(`\x1b[36m║\x1b[0m  Port:    ${String(port).padEnd(26)} \x1b[36m║\x1b[0m`);
@@ -46,53 +45,29 @@ function jsonResponse(data: unknown, status = 200): Response {
 
 function serveStatic(path: string): Response | null {
   const filePath = join(publicDir, path === "/" ? "index.html" : path);
-  try {
-    statSync(filePath);
-  } catch {
-    return null;
-  }
+  try { statSync(filePath); } catch { return null; }
   const ext = filePath.split(".").pop() || "";
   const types: Record<string, string> = {
-    html: "text/html",
-    css: "text/css",
-    js: "application/javascript",
-    json: "application/json",
-    png: "image/png",
-    svg: "image/svg+xml",
+    html: "text/html", css: "text/css", js: "application/javascript",
+    json: "application/json", png: "image/png", svg: "image/svg+xml",
   };
   return new Response(Bun.file(filePath), {
     headers: { "Content-Type": types[ext] || "application/octet-stream" },
   });
 }
 
-// SSE connections
+// SSE
 const sseClients = new Set<ReadableStreamDefaultController>();
 
 function broadcastSSE(data: unknown) {
   const msg = `data: ${JSON.stringify(data)}\n\n`;
   for (const controller of sseClients) {
-    try {
-      controller.enqueue(new TextEncoder().encode(msg));
-    } catch {
-      sseClients.delete(controller);
-    }
+    try { controller.enqueue(new TextEncoder().encode(msg)); }
+    catch { sseClients.delete(controller); }
   }
 }
 
-// Poll for changes every 5s
-let lastHash = "";
-setInterval(() => {
-  try {
-    const epics = scanEpics(flowDir, cache);
-    const runs = scanRuns();
-    const status = getStatus(runs);
-    const hash = JSON.stringify({ epics: epics.map((e) => e.status), status });
-    if (hash !== lastHash) {
-      lastHash = hash;
-      broadcastSSE({ type: "update", epics, status, timestamp: new Date().toISOString() });
-    }
-  } catch {}
-}, 5000);
+// ── Data scanning ────────────────────────────────────────────
 
 function scanRuns() {
   if (!existsSync(runsDir)) return [];
@@ -102,9 +77,20 @@ function scanRuns() {
     const progress = parseProgress(join(runPath, "progress.txt"), cache);
     const receipts = scanReceipts(join(runPath, "receipts"));
     const branches = readJsonSafe(join(runPath, "branches.json"));
-    const iterCosts = scanIterCosts(runPath, progress.iterations.length);
+
+    // Scan iter costs AND model usage
+    const iterCosts: number[] = [];
+    const iterModelUsage: Array<Record<string, any> | null> = [];
+    for (let i = 1; i <= Math.max(progress.iterations.length, 50); i++) {
+      const logFile = join(runPath, `iter-${String(i).padStart(3, "0")}.log`);
+      if (!existsSync(logFile)) break;
+      const result = parseIterResult(logFile, cache);
+      iterCosts.push(result?.total_cost_usd || 0);
+      iterModelUsage.push(result?.modelUsage || null);
+    }
+
     const totalCost = iterCosts.reduce((s, c) => s + c, 0);
-    return { id, ...progress, receipts, branches, iterCosts, totalCost };
+    return { id, ...progress, receipts, branches, iterCosts, iterModelUsage, totalCost };
   });
 }
 
@@ -116,23 +102,10 @@ function scanReceipts(dir: string): Array<{ id: string; verdict: string; type: s
     .filter(Boolean);
 }
 
-function scanIterCosts(runPath: string, iterCount: number): number[] {
-  const costs: number[] = [];
-  for (let i = 1; i <= Math.max(iterCount, 20); i++) {
-    const logFile = join(runPath, `iter-${String(i).padStart(3, "0")}.log`);
-    if (!existsSync(logFile)) break;
-    const result = parseIterResult(logFile, cache);
-    costs.push(result?.total_cost_usd || 0);
-  }
-  return costs;
-}
-
 function getStatus(runs: ReturnType<typeof scanRuns>) {
   if (runs.length === 0) return { active: false };
   const latest = runs[0];
   const lastIter = latest.iterations[latest.iterations.length - 1];
-
-  // Detect actively running iteration even if progress.txt hasn't been updated yet
   const hasRunningIter = latest.iterCosts.length > latest.iterations.length;
   const iterCount = Math.max(latest.iterations.length, latest.iterCosts.length);
   const isActive = hasRunningIter || (!!lastIter && !["BLOCKED", "STOP"].includes(lastIter.verdict || ""));
@@ -150,20 +123,102 @@ function getStatus(runs: ReturnType<typeof scanRuns>) {
 }
 
 function readdirSyncSafe(dir: string): string[] {
-  try {
-    return Array.from(new Bun.Glob("*").scanSync({ cwd: dir, onlyFiles: false }));
-  } catch {
-    return [];
-  }
+  try { return Array.from(new Bun.Glob("*").scanSync({ cwd: dir, onlyFiles: false })); }
+  catch { return []; }
 }
 
 function readJsonSafe(path: string): any {
-  try {
-    return JSON.parse(readFileSync(path, "utf-8"));
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(readFileSync(path, "utf-8")); }
+  catch { return null; }
 }
+
+// ── Live data (deep parse of active iteration) ──────────────
+
+function getLiveData() {
+  const runs = scanRuns();
+  const status = getStatus(runs);
+  if (!status.active || !runs.length) return null;
+
+  const latest = runs[0];
+  const runPath = join(runsDir, latest.id);
+
+  // Find the active iter-log (latest one)
+  const iterCount = Math.max(latest.iterations.length, latest.iterCosts.length);
+  let activeIterNum = iterCount;
+  // Check if there's a log beyond known iterations
+  for (let i = iterCount + 1; i <= iterCount + 2; i++) {
+    const logFile = join(runPath, `iter-${String(i).padStart(3, "0")}.log`);
+    if (existsSync(logFile)) activeIterNum = i;
+  }
+
+  const activeLogPath = join(runPath, `iter-${String(activeIterNum).padStart(3, "0")}.log`);
+  const deep = parseIterDeep(activeLogPath, cache);
+
+  return {
+    status,
+    deep,
+    iterNum: activeIterNum,
+  };
+}
+
+// ── SSE polling (2s) ─────────────────────────────────────────
+
+let lastHash = "";
+let lastLiveToolCount = 0;
+setInterval(() => {
+  try {
+    const epics = scanEpics(flowDir, cache);
+    const runs = scanRuns();
+    const status = getStatus(runs);
+    const live = getLiveData();
+
+    // Build hash from status + tool count for change detection
+    const toolCount = live?.deep?.toolCalls.length || 0;
+    const hash = JSON.stringify({
+      epics: epics.map((e) => e.status),
+      status,
+      tc: toolCount,
+    });
+
+    if (hash !== lastHash) {
+      lastHash = hash;
+
+      // Build SSE payload
+      const payload: any = {
+        type: "update",
+        status,
+        timestamp: new Date().toISOString(),
+      };
+
+      // Include live tool feed (last 8 new tools)
+      if (live?.deep) {
+        const newTools = live.deep.toolCalls.slice(lastLiveToolCount);
+        payload.toolFeed = newTools.slice(-8).map(t => ({
+          name: t.name,
+          summary: t.input_summary,
+        }));
+        payload.agents = live.deep.subagents.filter(a => a.status === "running");
+        payload.costs = {
+          total: undefined, // Client already has this from initial load
+          thisRun: status.totalCost,
+          thisIter: live.deep.totalCostUsd,
+          cacheHit: live.deep.cacheHitRate,
+        };
+        payload.toolCounts = live.deep.toolCounts;
+        lastLiveToolCount = live.deep.toolCalls.length;
+      }
+
+      // Task progress
+      const tasks = scanTasks(flowDir, cache);
+      const done = tasks.filter(t => t.status === "done").length;
+      payload.taskProgress = { done, total: tasks.length, percent: tasks.length ? Math.round((done / tasks.length) * 100) : 0 };
+
+      broadcastSSE(payload);
+    }
+  } catch {}
+}, 2000);
+
+// ── HTTP Server ──────────────────────────────────────────────
 
 Bun.serve({
   port,
@@ -172,7 +227,8 @@ Bun.serve({
     const url = new URL(req.url);
     const path = url.pathname;
 
-    // API routes
+    // ── Existing API routes ──
+
     if (path === "/api/epics") {
       const epics = scanEpics(flowDir, cache);
       const tasks = scanTasks(flowDir, cache);
@@ -186,8 +242,8 @@ Bun.serve({
     }
 
     if (path.startsWith("/api/tasks/")) {
-      const epicId = path.slice("/api/tasks/".length);
-      const tasks = scanTasks(flowDir, cache).filter((t) => t.epic === epicId);
+      const epicId = decodeURIComponent(path.slice("/api/tasks/".length));
+      const tasks = scanTasksWithState(flowDir, cache).filter((t) => t.epic === epicId);
       return jsonResponse(tasks);
     }
 
@@ -205,12 +261,69 @@ Bun.serve({
       );
     }
 
-    if (path.startsWith("/api/runs/")) {
-      const runId = path.slice("/api/runs/".length);
+    if (path.match(/^\/api\/runs\/[^/]+$/)) {
+      const runId = decodeURIComponent(path.slice("/api/runs/".length));
       const runs = scanRuns();
       const run = runs.find((r) => r.id === runId);
       if (!run) return jsonResponse({ error: "Run not found" }, 404);
       return jsonResponse(run);
+    }
+
+    // ── NEW: Tool usage for a run ──
+    if (path.match(/^\/api\/runs\/[^/]+\/tools$/)) {
+      const runId = decodeURIComponent(path.slice("/api/runs/".length).replace("/tools", ""));
+      const runPath = join(runsDir, runId);
+      if (!existsSync(runPath)) return jsonResponse({ error: "Run not found" }, 404);
+
+      const toolCounts: Record<string, number> = {};
+      const allTools: Array<{ iter: number; name: string; summary: string }> = [];
+
+      for (let i = 1; i <= 100; i++) {
+        const logFile = join(runPath, `iter-${String(i).padStart(3, "0")}.log`);
+        if (!existsSync(logFile)) break;
+        const deep = parseIterDeep(logFile, cache);
+        if (!deep) continue;
+        for (const [name, count] of Object.entries(deep.toolCounts)) {
+          toolCounts[name] = (toolCounts[name] || 0) + count;
+        }
+        for (const t of deep.toolCalls) {
+          allTools.push({ iter: i, name: t.name, summary: t.input_summary });
+        }
+      }
+
+      return jsonResponse({ toolCounts, recentTools: allTools.slice(-50) });
+    }
+
+    // ── NEW: Subagents for a run ──
+    if (path.match(/^\/api\/runs\/[^/]+\/agents$/)) {
+      const runId = decodeURIComponent(path.slice("/api/runs/".length).replace("/agents", ""));
+      const runPath = join(runsDir, runId);
+      if (!existsSync(runPath)) return jsonResponse({ error: "Run not found" }, 404);
+
+      const agents: Array<any> = [];
+      for (let i = 1; i <= 100; i++) {
+        const logFile = join(runPath, `iter-${String(i).padStart(3, "0")}.log`);
+        if (!existsSync(logFile)) break;
+        const deep = parseIterDeep(logFile, cache);
+        if (!deep) continue;
+        for (const a of deep.subagents) {
+          agents.push({ ...a, iter: i });
+        }
+      }
+
+      return jsonResponse({ agents });
+    }
+
+    // ── NEW: Live data (active iteration deep parse) ──
+    if (path === "/api/live") {
+      const live = getLiveData();
+      if (!live) return jsonResponse({ active: false });
+      return jsonResponse({
+        active: true,
+        ...live.status,
+        iterNum: live.iterNum,
+        deep: live.deep,
+      });
     }
 
     if (path === "/api/tokens") {
@@ -247,7 +360,6 @@ Bun.serve({
     const staticResp = serveStatic(path);
     if (staticResp) return staticResp;
 
-    // Fallback to index.html for SPA
     if (!path.startsWith("/api/")) {
       return serveStatic("/") || new Response("Not Found", { status: 404 });
     }

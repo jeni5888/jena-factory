@@ -15,7 +15,6 @@ export class Cache {
     try {
       const currentMtime = statSync(path).mtimeMs;
       if (currentMtime === entry.mtime) return entry.data as T;
-      // Stale — remove
       this.store.delete(path);
     } catch {
       this.store.delete(path);
@@ -39,6 +38,11 @@ export class Cache {
     } catch {
       return null;
     }
+  }
+
+  /** Evict a specific key (used when files are actively written to) */
+  evict(path: string): void {
+    this.store.delete(path);
   }
 
   get size(): number {
