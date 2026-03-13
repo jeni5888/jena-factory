@@ -80,6 +80,7 @@
           <div class="metric-row"><span class="label">Total</span><span class="value gold" id="cost-all">$0.00</span></div>
           <div class="metric-row"><span class="label">This Run</span><span class="value gold" id="cost-run">$0.00</span></div>
           <div class="metric-row"><span class="label">This Iter</span><span class="value gold" id="cost-iter">$0.00</span></div>
+          <div class="metric-row"><span class="label">$/min</span><span class="value gold" id="cost-rate">—</span></div>
           <div class="metric-row">
             <span class="label">Cache Hit</span>
             <span class="value" id="cache-hit-val">—</span>
@@ -90,6 +91,18 @@
         <div id="model-breakdown" class="model-breakdown">
           <span class="text-dim">—</span>
         </div>
+      </div>
+
+      <!-- HEARTBEAT: Cost per Turn -->
+      <div class="sub-panel">
+        <div class="sub-title">Cost Heartbeat <span class="text-dim" id="heartbeat-label">per turn</span></div>
+        <canvas id="chart-heartbeat" class="chart-canvas" width="400" height="80"></canvas>
+      </div>
+
+      <!-- CHART: Cumulative Cost -->
+      <div class="sub-panel">
+        <div class="sub-title">Cumulative Cost <span class="text-dim" id="cumcost-label"></span></div>
+        <canvas id="chart-cumcost" class="chart-canvas" width="400" height="80"></canvas>
       </div>
 
       <!-- Tool Distribution -->
@@ -111,6 +124,12 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- ═══ CHARTS: Iteration Cost History ═══ -->
+  <div class="section-title">ITERATION COST HISTORY</div>
+  <div class="chart-wide-container">
+    <canvas id="chart-iter-costs" class="chart-canvas-wide" width="900" height="100"></canvas>
   </div>
 
   <!-- ═══ ZONE D: TIMELINE ═══ -->

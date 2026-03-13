@@ -8,6 +8,8 @@ let epicCosts = {};
 let runStartedAt = null;
 let elapsedInterval = null;
 let toolFeedBuffer = [];
+let turnSnapshotBuffer = [];
+let iterCostHistory = []; // [{iter, cost, verdict, task}]
 const MAX_TOOL_FEED = 25;
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -80,28 +82,259 @@ function setText(id, text) {
   if (node) node.textContent = text;
 }
 
-// Tool icons
 const TOOL_ICONS = {
-  Bash: { icon: "$", cls: "ti-Bash" },
-  Read: { icon: "\u25b8", cls: "ti-Read" },
-  Edit: { icon: "\u270e", cls: "ti-Edit" },
-  Write: { icon: "\u2713", cls: "ti-Write" },
-  Grep: { icon: "\u2315", cls: "ti-Grep" },
-  Glob: { icon: "\u25c8", cls: "ti-Glob" },
-  Agent: { icon: "\u25c8", cls: "ti-Agent" },
-  Skill: { icon: "\u2726", cls: "ti-Skill" },
+  Bash: { icon: "$", cls: "ti-Bash" }, Read: { icon: "\u25b8", cls: "ti-Read" },
+  Edit: { icon: "\u270e", cls: "ti-Edit" }, Write: { icon: "\u2713", cls: "ti-Write" },
+  Grep: { icon: "\u2315", cls: "ti-Grep" }, Glob: { icon: "\u25c8", cls: "ti-Glob" },
+  Agent: { icon: "\u25c8", cls: "ti-Agent" }, Skill: { icon: "\u2726", cls: "ti-Skill" },
+};
+function getToolIcon(name) { return TOOL_ICONS[name] || { icon: "\u2022", cls: "" }; }
+
+const TOOL_COLORS = {
+  Bash: "#22c55e", Read: "#3b82f6", Edit: "#f59e0b",
+  Write: "#a855f7", Grep: "#06b6d4", Glob: "#06b6d4",
+  Agent: "#fbbf24", Skill: "#a855f7",
 };
 
-function getToolIcon(name) {
-  return TOOL_ICONS[name] || { icon: "\u2022", cls: "" };
+// ── Canvas Chart Helpers ─────────────────────────────────────
+
+function getCanvasCtx(id) {
+  const canvas = document.getElementById(id);
+  if (!canvas) return null;
+  // Set canvas resolution to match display size
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * (window.devicePixelRatio || 1);
+  canvas.height = rect.height * (window.devicePixelRatio || 1);
+  const ctx = canvas.getContext("2d");
+  ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
+  return { ctx, w: rect.width, h: rect.height };
 }
 
-// Tool bar colors
-const TOOL_COLORS = {
-  Bash: "var(--green)", Read: "var(--blue)", Edit: "var(--amber)",
-  Write: "var(--purple)", Grep: "var(--cyan)", Glob: "var(--cyan)",
-  Agent: "var(--gold)", Skill: "var(--purple)",
-};
+/** Draw a heartbeat/EKG-style chart */
+function drawHeartbeat(canvasId, data, color, fillColor) {
+  const c = getCanvasCtx(canvasId);
+  if (!c || !data.length) return;
+  const { ctx, w, h } = c;
+
+  ctx.clearRect(0, 0, w, h);
+
+  const maxVal = Math.max(...data, 0.001);
+  const barW = Math.max(1, (w - 4) / data.length - 1);
+  const padBottom = 14;
+  const chartH = h - padBottom;
+
+  // Grid lines
+  ctx.strokeStyle = "rgba(55,65,81,0.3)";
+  ctx.lineWidth = 0.5;
+  for (let i = 1; i <= 3; i++) {
+    const y = (chartH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+
+  // Draw line
+  ctx.beginPath();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = "round";
+
+  for (let i = 0; i < data.length; i++) {
+    const x = 2 + i * ((w - 4) / data.length) + barW / 2;
+    const y = chartH - (data[i] / maxVal) * (chartH - 4);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Fill under the line
+  if (fillColor) {
+    const lastX = 2 + (data.length - 1) * ((w - 4) / data.length) + barW / 2;
+    ctx.lineTo(lastX, chartH);
+    ctx.lineTo(2 + barW / 2, chartH);
+    ctx.closePath();
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+  }
+
+  // Glow dot at the end
+  if (data.length > 0) {
+    const lastI = data.length - 1;
+    const lastX = 2 + lastI * ((w - 4) / data.length) + barW / 2;
+    const lastY = chartH - (data[lastI] / maxVal) * (chartH - 4);
+    ctx.beginPath();
+    ctx.arc(lastX, lastY, 3, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(lastX, lastY, 6, 0, Math.PI * 2);
+    ctx.fillStyle = color.replace(")", ",0.2)").replace("rgb", "rgba");
+    ctx.fill();
+  }
+
+  // Labels
+  ctx.fillStyle = "#6B7280";
+  ctx.font = "9px monospace";
+  ctx.textAlign = "left";
+  ctx.fillText(fmt$(maxVal), 2, 10);
+  ctx.textAlign = "right";
+  ctx.fillText(data.length + " turns", w - 2, h - 2);
+}
+
+/** Draw a bar chart for iteration costs */
+function drawIterCostBars(canvasId, iters) {
+  const c = getCanvasCtx(canvasId);
+  if (!c || !iters.length) return;
+  const { ctx, w, h } = c;
+
+  ctx.clearRect(0, 0, w, h);
+
+  const maxCost = Math.max(...iters.map(i => i.cost || 0), 0.01);
+  const barW = Math.max(3, Math.min(20, (w - 20) / iters.length - 2));
+  const padBottom = 16;
+  const chartH = h - padBottom;
+
+  // Grid
+  ctx.strokeStyle = "rgba(55,65,81,0.3)";
+  ctx.lineWidth = 0.5;
+  for (let i = 1; i <= 3; i++) {
+    const y = (chartH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+
+  const totalW = iters.length * (barW + 2);
+  const offsetX = Math.max(0, (w - totalW) / 2);
+
+  for (let i = 0; i < iters.length; i++) {
+    const it = iters[i];
+    const barH = Math.max(1, (it.cost / maxCost) * (chartH - 4));
+    const x = offsetX + i * (barW + 2);
+    const y = chartH - barH;
+
+    // Color by verdict
+    let clr = "#3b82f6"; // blue default
+    if (it.verdict === "SHIP") clr = "#22c55e";
+    else if (it.verdict === "REWORK") clr = "#f59e0b";
+    else if (it.verdict === "BLOCKED" || it.verdict === "STOP") clr = "#ef4444";
+
+    // Bar
+    ctx.fillStyle = clr;
+    ctx.beginPath();
+    ctx.roundRect(x, y, barW, barH, 1);
+    ctx.fill();
+
+    // Glow for the latest bar
+    if (i === iters.length - 1) {
+      ctx.shadowColor = clr;
+      ctx.shadowBlur = 8;
+      ctx.fillStyle = clr;
+      ctx.beginPath();
+      ctx.roundRect(x, y, barW, barH, 1);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+  }
+
+  // Labels
+  ctx.fillStyle = "#6B7280";
+  ctx.font = "9px monospace";
+  ctx.textAlign = "left";
+  ctx.fillText(fmt$(maxCost), 2, 10);
+  ctx.textAlign = "right";
+  const totalCost = iters.reduce((s, i) => s + (i.cost || 0), 0);
+  ctx.fillText(`${iters.length} iters \u2022 ${fmt$(totalCost)} total`, w - 4, h - 2);
+
+  // Verdict legend
+  ctx.textAlign = "left";
+  const legend = [
+    { label: "SHIP", color: "#22c55e" },
+    { label: "REWORK", color: "#f59e0b" },
+    { label: "BLOCKED", color: "#ef4444" },
+  ];
+  let lx = 4;
+  const ly = h - 2;
+  for (const l of legend) {
+    ctx.fillStyle = l.color;
+    ctx.fillRect(lx, ly - 6, 6, 6);
+    lx += 8;
+    ctx.fillStyle = "#6B7280";
+    ctx.fillText(l.label, lx, ly);
+    lx += ctx.measureText(l.label).width + 8;
+  }
+}
+
+/** Draw cumulative cost line chart */
+function drawCumulativeCost(canvasId, snapshots) {
+  const c = getCanvasCtx(canvasId);
+  if (!c || !snapshots.length) return;
+  const { ctx, w, h } = c;
+
+  ctx.clearRect(0, 0, w, h);
+
+  const costs = snapshots.map(s => s.cumulativeCost);
+  const maxCost = Math.max(...costs, 0.001);
+  const padBottom = 14;
+  const chartH = h - padBottom;
+
+  // Grid
+  ctx.strokeStyle = "rgba(55,65,81,0.3)";
+  ctx.lineWidth = 0.5;
+  for (let i = 1; i <= 3; i++) {
+    const y = (chartH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+
+  // Area fill
+  ctx.beginPath();
+  for (let i = 0; i < costs.length; i++) {
+    const x = (i / (costs.length - 1 || 1)) * (w - 4) + 2;
+    const y = chartH - (costs[i] / maxCost) * (chartH - 4);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  const lastX = ((costs.length - 1) / (costs.length - 1 || 1)) * (w - 4) + 2;
+  ctx.lineTo(lastX, chartH);
+  ctx.lineTo(2, chartH);
+  ctx.closePath();
+  const gradient = ctx.createLinearGradient(0, 0, 0, chartH);
+  gradient.addColorStop(0, "rgba(251,191,36,0.3)");
+  gradient.addColorStop(1, "rgba(251,191,36,0.02)");
+  ctx.fillStyle = gradient;
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  ctx.strokeStyle = "#fbbf24";
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = "round";
+  for (let i = 0; i < costs.length; i++) {
+    const x = (i / (costs.length - 1 || 1)) * (w - 4) + 2;
+    const y = chartH - (costs[i] / maxCost) * (chartH - 4);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Glow dot at end
+  if (costs.length > 0) {
+    const lx = ((costs.length - 1) / (costs.length - 1 || 1)) * (w - 4) + 2;
+    const ly = chartH - (costs[costs.length - 1] / maxCost) * (chartH - 4);
+    ctx.beginPath();
+    ctx.arc(lx, ly, 3, 0, Math.PI * 2);
+    ctx.fillStyle = "#fbbf24";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(lx, ly, 6, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(251,191,36,0.2)";
+    ctx.fill();
+  }
+
+  // Labels
+  ctx.fillStyle = "#6B7280";
+  ctx.font = "9px monospace";
+  ctx.textAlign = "left";
+  ctx.fillText(fmt$(maxCost), 2, 10);
+  ctx.textAlign = "right";
+  ctx.fillText(fmt$(costs[costs.length - 1] || 0) + " current", w - 2, h - 2);
+}
 
 // ── Elapsed Timer ────────────────────────────────────────────
 function startElapsedTimer(startedIso) {
@@ -153,17 +386,11 @@ function renderEpics(epics) {
     if (blocked) barSpans.push(el("span", { className: "bar-blocked", style: `flex:${blocked}` }));
     if (todo > 0) barSpans.push(el("span", { className: "bar-todo", style: `flex:${todo}` }));
 
-    // Status badge
     let statusBadge = null;
-    if (e.completion_review_status === "ship") {
-      statusBadge = el("span", { className: "epic-status-badge badge-ship" }, "SHIP");
-    } else if (isDone) {
-      statusBadge = el("span", { className: "epic-status-badge badge-done" }, "DONE");
-    } else if (ip > 0) {
-      statusBadge = el("span", { className: "epic-status-badge badge-in_progress" }, "WIP");
-    } else if (blocked > 0) {
-      statusBadge = el("span", { className: "epic-status-badge badge-blocked" }, "BLOCKED");
-    }
+    if (e.completion_review_status === "ship") statusBadge = el("span", { className: "epic-status-badge badge-ship" }, "SHIP");
+    else if (isDone) statusBadge = el("span", { className: "epic-status-badge badge-done" }, "DONE");
+    else if (ip > 0) statusBadge = el("span", { className: "epic-status-badge badge-in_progress" }, "WIP");
+    else if (blocked > 0) statusBadge = el("span", { className: "epic-status-badge badge-blocked" }, "BLOCKED");
 
     const epicId = e.id;
     return el("div", {
@@ -187,16 +414,12 @@ function renderEpics(epics) {
 async function selectEpic(epicId) {
   selectedEpic = epicId;
   renderEpics(allEpics);
-
   const zone = $("#task-detail-zone");
   zone.style.display = "block";
-
   const epic = allEpics.find(e => e.id === epicId);
   setText("task-detail-title", `TASKS \u2014 ${epicId}${epic ? " \u2014 " + epic.title : ""}`);
-
   const detail = $("#task-detail");
   detail.textContent = "Loading...";
-
   const tasks = await fetchJson(`/api/tasks/${encodeURIComponent(epicId)}`);
   if (!tasks || !tasks.length) { detail.textContent = "No tasks"; return; }
 
@@ -207,7 +430,6 @@ async function selectEpic(epicId) {
       if (t.evidence.tests?.length) evidenceBadges.push(el("span", {}, `${t.evidence.tests.length} tests`));
       if (t.evidence.prs?.length) evidenceBadges.push(el("span", {}, `${t.evidence.prs.length} PRs`));
     }
-
     let statusCls = "text-dim";
     if (t.status === "done") statusCls = "green";
     else if (t.status === "in_progress") statusCls = "amber";
@@ -221,7 +443,6 @@ async function selectEpic(epicId) {
       evidenceBadges.length ? el("span", { className: "task-evidence" }, evidenceBadges) : null,
     ]);
   });
-
   clear(detail);
   items.forEach(i => detail.appendChild(i));
 }
@@ -239,27 +460,25 @@ function renderStatus(status) {
   }
 
   const taskEl = $("#status-task");
-  if (status.currentTask) {
-    taskEl.textContent = status.currentTask;
-  } else {
-    taskEl.textContent = "";
-  }
-
+  taskEl.textContent = status.currentTask || "";
   setText("iter-count", status.iteration ? `iter ${status.iteration}` : "iter \u2014");
   setText("cost-total", fmt$(status.totalCost));
 
-  // Current task panel
+  // Cost rate ($/min)
+  if (runStartedAt && status.totalCost > 0) {
+    const elapsedMin = (Date.now() - runStartedAt) / 60000;
+    if (elapsedMin > 0.5) {
+      setText("cost-rate", fmt$(status.totalCost / elapsedMin) + "/min");
+    }
+  }
+
   const ctPanel = $("#current-task-info");
   if (status.active && status.currentTask) {
-    const nodes = [
-      el("div", { className: "ct-id" }, status.currentTask),
-    ];
+    const nodes = [el("div", { className: "ct-id" }, status.currentTask)];
     if (status.currentEpic) {
       nodes.push(el("div", { className: "ct-meta" }, [
-        el("span", {}, "Epic: "),
-        el("span", { className: "val" }, status.currentEpic),
-        el("span", { style: "margin-left:8px" }, "Iter: "),
-        el("span", { className: "val" }, String(status.iteration || "\u2014")),
+        el("span", {}, "Epic: "), el("span", { className: "val" }, status.currentEpic),
+        el("span", { style: "margin-left:8px" }, "Iter: "), el("span", { className: "val" }, String(status.iteration || "\u2014")),
         status.verdict ? el("span", { style: "margin-left:8px" }) : null,
         status.verdict ? el("span", { className: `verdict-${status.verdict}`, style: "font-weight:700" }, status.verdict) : null,
       ]));
@@ -274,17 +493,11 @@ function renderStatus(status) {
 
 function renderToolFeed(tools) {
   if (!tools || !tools.length) return;
-
-  for (const t of tools) {
-    toolFeedBuffer.push(t);
-  }
-  if (toolFeedBuffer.length > MAX_TOOL_FEED) {
-    toolFeedBuffer = toolFeedBuffer.slice(-MAX_TOOL_FEED);
-  }
+  for (const t of tools) toolFeedBuffer.push(t);
+  if (toolFeedBuffer.length > MAX_TOOL_FEED) toolFeedBuffer = toolFeedBuffer.slice(-MAX_TOOL_FEED);
 
   const feed = $("#tool-feed");
   clear(feed);
-
   const entries = toolFeedBuffer.slice().reverse();
   for (const t of entries) {
     const icon = getToolIcon(t.name);
@@ -304,10 +517,9 @@ function renderToolDist(toolCounts) {
 
   const max = entries[0][1] || 1;
   clear(dist);
-
   for (const [name, count] of entries.slice(0, 10)) {
     const pct = ((count / max) * 100).toFixed(0);
-    const color = TOOL_COLORS[name] || "var(--text-dim)";
+    const color = TOOL_COLORS[name] || "#6B7280";
     dist.appendChild(el("div", { className: "td-row" }, [
       el("span", { className: "td-name" }, name),
       el("div", { className: "td-bar" }, [
@@ -321,11 +533,8 @@ function renderToolDist(toolCounts) {
 function renderSubagents(agents) {
   const list = $("#subagent-list");
   if (!agents || !agents.length) {
-    clear(list);
-    list.appendChild(el("span", { className: "text-dim" }, "None"));
-    return;
+    clear(list); list.appendChild(el("span", { className: "text-dim" }, "None")); return;
   }
-
   clear(list);
   for (const a of agents) {
     list.appendChild(el("div", { className: "sa-entry" }, [
@@ -349,7 +558,6 @@ function renderSubagentStats(agents) {
   const completed = agents.filter(a => a.status === "completed").length;
   const running = agents.filter(a => a.status === "running").length;
   const totalTokens = agents.reduce((s, a) => s + (a.tokens || 0), 0);
-
   setText("sa-dispatched", String(agents.length));
   setText("sa-completed", String(completed));
   setText("sa-running", String(running));
@@ -360,7 +568,6 @@ function renderCosts(costs, tokens) {
   if (costs) {
     setText("cost-run", fmt$(costs.thisRun));
     setText("cost-iter", fmt$(costs.thisIter));
-
     const hit = costs.cacheHit;
     if (hit != null) {
       setText("cache-hit-val", hit.toFixed(1) + "%");
@@ -368,20 +575,14 @@ function renderCosts(costs, tokens) {
       if (bar) bar.style.width = hit.toFixed(0) + "%";
     }
   }
-
   if (tokens) {
     setText("cost-all", fmt$(tokens.totalCost));
     setText("cost-total", fmt$(tokens.totalCost));
-
     epicCosts = tokens.perEpic || {};
 
     const mb = $("#model-breakdown");
     const models = Object.entries(tokens.modelBreakdown || {});
-    if (!models.length) {
-      clear(mb);
-      mb.appendChild(el("span", { className: "text-dim" }, "\u2014"));
-      return;
-    }
+    if (!models.length) { clear(mb); mb.appendChild(el("span", { className: "text-dim" }, "\u2014")); return; }
     clear(mb);
     for (const [name, data] of models) {
       const shortName = name.replace("claude-", "").replace(/-\d+$/, "");
@@ -401,21 +602,15 @@ function renderCosts(costs, tokens) {
 function renderErrors(errors) {
   const panel = $("#error-panel");
   const feed = $("#error-feed");
-  if (!errors || !errors.length) {
-    panel.style.display = "none";
-    return;
-  }
+  if (!errors || !errors.length) { panel.style.display = "none"; return; }
   panel.style.display = "block";
   clear(feed);
-  for (const err of errors) {
-    feed.appendChild(el("div", { className: "error-entry" }, err));
-  }
+  for (const err of errors) feed.appendChild(el("div", { className: "error-entry" }, err));
 }
 
 function renderTimeline(run) {
   const container = $("#timeline");
   if (!run || !run.iterations?.length) { container.textContent = "No iterations"; return; }
-
   clear(container);
   const iters = run.iterations.slice().reverse().slice(0, 40);
   for (const iter of iters) {
@@ -425,29 +620,47 @@ function renderTimeline(run) {
       el("span", { className: "iter" }, `iter ${iter.iter}`),
       el("span", { className: "task" }, iter.task || iter.epic || "\u2014"),
       el("span", { className: "cost" }, cost != null ? fmt$(cost) : ""),
-      el("span", {
-        className: `verdict ${iter.verdict ? "verdict-" + iter.verdict : ""}`,
-      }, iter.verdict || "\u2014"),
+      el("span", { className: `verdict ${iter.verdict ? "verdict-" + iter.verdict : ""}` }, iter.verdict || "\u2014"),
     ]));
   }
+
+  // Build iteration cost history for the bar chart
+  iterCostHistory = run.iterations.map((it, i) => ({
+    iter: it.iter,
+    cost: run.iterCosts?.[i] || 0,
+    verdict: it.verdict || "",
+    task: it.task || "",
+  }));
+  drawIterCostBars("chart-iter-costs", iterCostHistory);
 }
 
 function renderRuns(runs) {
   const list = $("#run-history");
   if (!runs || !runs.length) { list.textContent = "No runs"; return; }
-
   clear(list);
   for (const r of runs.slice(0, 15)) {
-    list.appendChild(el("div", {
-      className: "run-item",
-      onclick: () => loadRunDetail(r.id),
-    }, [
+    list.appendChild(el("div", { className: "run-item", onclick: () => loadRunDetail(r.id) }, [
       el("span", { className: "run-id" }, r.id),
       el("span", { className: "run-iters" }, `${r.iterCount} iters`),
       el("span", { className: `run-verdict ${r.lastVerdict ? "verdict-" + r.lastVerdict : ""}` }, r.lastVerdict || "\u2014"),
       el("span", { className: "run-cost" }, fmt$(r.totalCost)),
     ]));
   }
+}
+
+/** Render charts from turn snapshot data */
+function renderCharts(snapshots) {
+  if (!snapshots || !snapshots.length) return;
+  turnSnapshotBuffer = snapshots;
+
+  // Heartbeat: cost per turn
+  const costPerTurn = snapshots.map(s => s.costEstimate || 0);
+  setText("heartbeat-label", `${snapshots.length} turns`);
+  drawHeartbeat("chart-heartbeat", costPerTurn, "#22c55e", "rgba(34,197,94,0.08)");
+
+  // Cumulative cost
+  setText("cumcost-label", fmt$(snapshots[snapshots.length - 1]?.cumulativeCost || 0));
+  drawCumulativeCost("chart-cumcost", snapshots);
 }
 
 async function loadRunDetail(runId) {
@@ -469,15 +682,10 @@ async function loadAll() {
   if (epics) {
     if (tokens) epicCosts = tokens.perEpic || {};
     renderEpics(epics);
-
     let done = 0, total = 0;
-    for (const e of epics) {
-      total += e.taskTotal || 0;
-      done += e.taskCounts?.done || 0;
-    }
+    for (const e of epics) { total += e.taskTotal || 0; done += e.taskCounts?.done || 0; }
     renderGlobalProgress({ done, total, percent: total ? Math.round((done / total) * 100) : 0 });
   }
-
   if (status) renderStatus(status);
   if (runs) {
     renderRuns(runs);
@@ -485,12 +693,9 @@ async function loadAll() {
   }
   if (tokens) renderCosts(null, tokens);
 
-  if (live && live.active && live.deep) {
+  if (live && live.active !== false && live.deep) {
     const deep = live.deep;
-    toolFeedBuffer = deep.toolCalls.slice(-MAX_TOOL_FEED).map(t => ({
-      name: t.name,
-      summary: t.input_summary,
-    }));
+    toolFeedBuffer = deep.toolCalls.slice(-MAX_TOOL_FEED).map(t => ({ name: t.name, summary: t.input_summary }));
     renderToolFeed([]);
     renderToolDist(deep.toolCounts);
     renderSubagents(deep.subagents);
@@ -498,9 +703,13 @@ async function loadAll() {
     renderErrors(deep.errors);
     renderCosts({
       thisRun: live.totalCost,
-      thisIter: deep.totalCostUsd,
+      thisIter: deep.totalCostUsd || deep.estimatedCostUsd,
       cacheHit: deep.cacheHitRate,
     }, null);
+    // Charts!
+    if (deep.turnSnapshots?.length) {
+      renderCharts(deep.turnSnapshots);
+    }
   }
 }
 
@@ -509,7 +718,6 @@ async function loadAll() {
 function connectSSE() {
   const statusEl = $("#connection-status");
   statusEl.textContent = "Connecting...";
-
   const evtSource = new EventSource("/api/events");
 
   evtSource.onopen = () => {
@@ -521,16 +729,16 @@ function connectSSE() {
     try {
       const data = JSON.parse(event.data);
       if (data.type === "connected") return;
-
       if (data.type === "update") {
         if (data.status) renderStatus(data.status);
         if (data.taskProgress) renderGlobalProgress(data.taskProgress);
         if (data.toolFeed?.length) renderToolFeed(data.toolFeed);
         if (data.toolCounts) renderToolDist(data.toolCounts);
-        if (data.agents) renderSubagents(data.agents);
+        if (data.agents) { renderSubagents(data.agents); renderSubagentStats(data.agents); }
         if (data.costs) renderCosts(data.costs, null);
+        if (data.turnSnapshots?.length) renderCharts(data.turnSnapshots);
 
-        // Periodic full reload for consistency
+        // Periodic full reload
         if (Math.random() < 0.1) {
           fetchJson("/api/epics").then(epics => { if (epics) renderEpics(epics); });
           fetchJson("/api/tokens").then(tokens => { if (tokens) renderCosts(null, tokens); });
@@ -550,3 +758,9 @@ function connectSSE() {
 // ── Init ─────────────────────────────────────────────────────
 loadAll();
 connectSSE();
+
+// Redraw charts on resize
+window.addEventListener("resize", () => {
+  if (turnSnapshotBuffer.length) renderCharts(turnSnapshotBuffer);
+  if (iterCostHistory.length) drawIterCostBars("chart-iter-costs", iterCostHistory);
+});

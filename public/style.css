@@ -368,6 +368,24 @@ a:hover{text-decoration:underline}
 .task-evidence{display:flex;gap:4px}
 .task-evidence span{font-size:9px;padding:0 3px;border-radius:2px;background:rgba(34,197,94,0.1);color:var(--green)}
 
+/* ═══ CHARTS ═══ */
+.chart-canvas{
+  width:100%;
+  height:80px;
+  border-radius:4px;
+  background:var(--bg);
+}
+.chart-wide-container{
+  padding:0 20px 12px;
+}
+.chart-canvas-wide{
+  width:100%;
+  height:100px;
+  border-radius:6px;
+  background:var(--bg2);
+  border:1px solid var(--border);
+}
+
 /* ═══ RUN HISTORY ═══ */
 .run-history{padding:0 20px 20px;max-height:200px;overflow-y:auto}
 .run-item{

@@ -71,7 +71,9 @@ function broadcastSSE(data: unknown) {
 
 function scanRuns() {
   if (!existsSync(runsDir)) return [];
-  const dirs = readdirSyncSafe(runsDir).sort().reverse();
+  const dirs = readdirSyncSafe(runsDir)
+    .filter((d) => /^\d{8}-\d{6}-[a-f0-9]{4}$/.test(d)) // Only valid run dirs
+    .sort().reverse();
   return dirs.map((id) => {
     const runPath = join(runsDir, id);
     const progress = parseProgress(join(runPath, "progress.txt"), cache);
@@ -197,14 +199,17 @@ setInterval(() => {
           name: t.name,
           summary: t.input_summary,
         }));
-        payload.agents = live.deep.subagents.filter(a => a.status === "running");
+        payload.agents = live.deep.subagents;
         payload.costs = {
-          total: undefined, // Client already has this from initial load
+          total: undefined,
           thisRun: status.totalCost,
-          thisIter: live.deep.totalCostUsd,
+          thisIter: live.deep.totalCostUsd || live.deep.estimatedCostUsd,
           cacheHit: live.deep.cacheHitRate,
         };
         payload.toolCounts = live.deep.toolCounts;
+        payload.modelUsage = live.deep.modelUsage;
+        payload.turnSnapshots = live.deep.turnSnapshots;
+        payload.isLive = live.deep.isLive;
         lastLiveToolCount = live.deep.toolCalls.length;
       }
 
@@ -356,6 +361,31 @@ Bun.serve({
       });
     }
 
+    // Debug endpoint — shows what the server sees
+    if (path === "/api/debug") {
+      const runs = scanRuns();
+      const allDirs = readdirSyncSafe(runsDir);
+      return jsonResponse({
+        projectDir,
+        flowDir,
+        runsDir,
+        flowExists: existsSync(flowDir),
+        runsDirExists: existsSync(runsDir),
+        allDirEntries: allDirs,
+        validRunDirs: allDirs.filter((d) => /^\d{8}-\d{6}-[a-f0-9]{4}$/.test(d)),
+        runsFound: runs.length,
+        runsDetail: runs.slice(0, 3).map(r => ({
+          id: r.id,
+          iterCount: r.iterCosts.length,
+          totalCost: r.totalCost,
+          hasProgress: r.iterations.length > 0,
+          started: r.started,
+        })),
+        epicCount: scanEpics(flowDir, cache).length,
+        taskCount: scanTasks(flowDir, cache).length,
+      });
+    }
+
     // Static files
     const staticResp = serveStatic(path);
     if (staticResp) return staticResp;
@@ -367,5 +397,19 @@ Bun.serve({
     return new Response("Not Found", { status: 404 });
   },
 });
+
+// ── Startup diagnostics ──────────────────────────────────────
+{
+  const runs = scanRuns();
+  const epics = scanEpics(flowDir, cache);
+  const tasks = scanTasks(flowDir, cache);
+  let totalIterLogs = 0;
+  for (const r of runs) totalIterLogs += r.iterCosts.length;
+  console.log(`\x1b[33m  Epics:     ${epics.length}\x1b[0m`);
+  console.log(`\x1b[33m  Tasks:     ${tasks.length}\x1b[0m`);
+  console.log(`\x1b[33m  Runs:      ${runs.length}\x1b[0m`);
+  console.log(`\x1b[33m  Iter-Logs: ${totalIterLogs}\x1b[0m`);
+  console.log(`\x1b[33m  Total $:   $${runs.reduce((s, r) => s + r.totalCost, 0).toFixed(2)}\x1b[0m`);
+}
 
 console.log(`\n\x1b[32m✓ Listening on http://0.0.0.0:${port}\x1b[0m`);
